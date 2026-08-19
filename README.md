@@ -1,4 +1,4 @@
-# Document Reader Architecture
+# RAG Architecture
 
 
 # Document Reading (part 1)
@@ -27,6 +27,5 @@ main.py → DocumentReaderFactory → Concrete Readers (TxtReader, PdfReader, Do
 
 - **Factory Pattern**: `DocumentReaderFactory` instantiates and selects the right reader based on file extension
 - **Strategy Pattern**: Each reader implements the same `DocumentReader` interface (`read()`, `supported_extensions()`)
-- **Open/Closed Principle**: Add new formats by creating a new reader class and registering it—no changes to existing code
 
 # Chunking the docs (part 2)
