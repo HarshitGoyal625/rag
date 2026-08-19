@@ -70,12 +70,3 @@ class DocumentReaderFactory:
             extensions.extend(reader.supported_extensions())
         return sorted(set(extensions))
 
-    @classmethod
-    def register_reader(cls, reader: DocumentReader) -> None:
-        """
-        Register a custom reader (useful for testing or extensions).
-
-        Args:
-            reader: DocumentReader instance to register
-        """
-        cls._get_readers().insert(0, reader)  # Prepend to prioritize custom readers

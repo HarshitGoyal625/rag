@@ -28,9 +28,7 @@ env/
 Thumbs.db
 
 # Test data / generated files
-documents/test.*
-documents/policies/*.pdf
-documents/policies/*.docx
+documents/
 
 # Logs
 *.log
