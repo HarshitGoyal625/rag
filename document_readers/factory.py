@@ -69,4 +69,3 @@ class DocumentReaderFactory:
         for reader in cls._get_readers():
             extensions.extend(reader.supported_extensions())
         return sorted(set(extensions))
-
