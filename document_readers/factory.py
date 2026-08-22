@@ -5,6 +5,7 @@ from .base import DocumentReader
 from .txt_reader import TxtReader
 from .pdf_reader import PdfReader
 from .docx_reader import DocxReader
+from .structure import DocumentStructure
 
 
 class DocumentReaderFactory:
@@ -40,7 +41,7 @@ class DocumentReaderFactory:
         return None
 
     @classmethod
-    def read_document(cls, file_path: Path) -> str:
+    def read_document(cls, file_path: Path) -> DocumentStructure:
         """
         Read a document using the appropriate reader.
 
@@ -48,11 +49,12 @@ class DocumentReaderFactory:
             file_path: Path to the document file
 
         Returns:
-            Extracted text content
+            `DocumentStructure` preserving the source's structure
 
         Raises:
             ValueError: If no reader supports the file type or reading fails
         """
+
         reader = cls.get_reader(file_path)
         if reader is None:
             supported = cls.get_supported_extensions()
@@ -70,3 +72,12 @@ class DocumentReaderFactory:
             extensions.extend(reader.supported_extensions())
         return sorted(set(extensions))
 
+    @classmethod
+    def register_reader(cls, reader: DocumentReader) -> None:
+        """
+        Register a custom reader (useful for testing or extensions).
+
+        Args:
+            reader: DocumentReader instance to register
+        """
+        cls._get_readers().insert(0, reader)  # Prepend to prioritize custom readers

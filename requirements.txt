@@ -1,2 +1,11 @@
-pypdf>=6.0.0
-python-docx>=1.1.0
+# Core document readers
+pymupdf>=1.23.0          # PDF structure extraction (replaces pypdf)
+python-docx>=1.1.0       # DOCX parsing
+
+# Optional fallbacks (already in env, not required for basic operation)
+# pymupdf4llm>=0.0.1     # LLM-ready Markdown via Marker (heavy: PyTorch)
+# docling>=2.0.0         # IBM layout model + OCR (heavy: PyTorch)
+
+# Dev / test
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
