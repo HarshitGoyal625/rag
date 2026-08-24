@@ -2,19 +2,32 @@
 
 Reads all supported documents in a directory into the structured IR
 (`DocumentStructure`), chunks them, embeds them, indexes them,
-and demonstrates semantic, keyword, and hybrid retrieval.
+and demonstrates semantic, keyword, hybrid, and reranked retrieval.
 """
 
 from pathlib import Path
 
-from retriever import BM25Retriever, HybridRetriever
+from retriever import (
+    BM25Retriever,
+    HybridRetriever,
+    CrossEncoderReranker,
+)
+
 from document_readers import DocumentReaderFactory
 from document_readers import DocumentStructure
+
 from chunkers import BlockAwareRecursiveChunker
+
 from embeddings import E5Embedder, VectorStore
 
 
-def read_documents(directory: str) -> dict[str, DocumentStructure]:
+# ============================================================
+# DOCUMENT READING
+# ============================================================
+
+def read_documents(
+    directory: str,
+) -> dict[str, DocumentStructure]:
     """
     Recursively read all supported documents in a directory.
 
@@ -22,32 +35,47 @@ def read_documents(directory: str) -> dict[str, DocumentStructure]:
         directory: Path to the documents directory
 
     Returns:
-        Dictionary mapping file paths to their structured IR
-        (`DocumentStructure`).
+        Dictionary mapping file paths to their structured IR.
     """
+
     documents: dict[str, DocumentStructure] = {}
+
     root_path = Path(directory)
 
     for file_path in root_path.rglob("*"):
+
         if file_path.is_file():
+
             try:
-                doc = DocumentReaderFactory.read_document(file_path)
+                doc = DocumentReaderFactory.read_document(
+                    file_path
+                )
+
                 documents[str(file_path)] = doc
+
                 print(f"✓ Read: {file_path}")
+
             except ValueError as e:
-                print(f"✗ Skipped {file_path}: {e}")
+
+                print(
+                    f"✗ Skipped {file_path}: {e}"
+                )
 
     return documents
 
 
+# ============================================================
+# CHUNKING
+# ============================================================
+
 def chunk_documents(
     documents: dict[str, DocumentStructure],
-    **chunker_kwargs
+    **chunker_kwargs,
 ) -> dict[str, list]:
     """Chunk all documents using BlockAwareRecursiveChunker."""
+
     from document_readers.structure import ChunkerConfig
 
-    # Extract config fields from kwargs
     config_fields = {
         "max_tokens",
         "overlap_tokens",
@@ -69,19 +97,31 @@ def chunk_documents(
         else ChunkerConfig()
     )
 
-    chunker = BlockAwareRecursiveChunker(config=config)
+    chunker = BlockAwareRecursiveChunker(
+        config=config
+    )
+
     all_chunks: dict[str, list] = {}
 
     for path, doc in documents.items():
+
         chunks = chunker.chunk(doc)
+
         all_chunks[path] = chunks
-        print(f"✓ Chunked: {path} -> {len(chunks)} chunks")
+
+        print(
+            f"✓ Chunked: {path} -> "
+            f"{len(chunks)} chunks"
+        )
 
     return all_chunks
 
 
-def flatten_chunks(all_chunks: dict[str, list]) -> list:
+def flatten_chunks(
+    all_chunks: dict[str, list],
+) -> list:
     """Flatten document-wise chunks into a single list."""
+
     flat_chunks = []
 
     for chunks in all_chunks.values():
@@ -89,6 +129,10 @@ def flatten_chunks(all_chunks: dict[str, list]) -> list:
 
     return flat_chunks
 
+
+# ============================================================
+# EMBEDDING + VECTOR INDEX
+# ============================================================
 
 def embed_and_index(
     all_chunks: dict[str, list],
@@ -112,83 +156,179 @@ def embed_and_index(
         f"(dim={embedder.dimension})..."
     )
 
-    # Flatten all chunks
-    flat_chunks = flatten_chunks(all_chunks)
+    flat_chunks = flatten_chunks(
+        all_chunks
+    )
 
-    # Embed in batches
-    texts = [chunk.text for chunk in flat_chunks]
+    texts = [
+        chunk.text
+        for chunk in flat_chunks
+    ]
 
-    embeddings = embedder.embed(texts)
+    embeddings = embedder.embed(
+        texts
+    )
 
-    # Upsert to vector store
     store.upsert_chunks(
         flat_chunks,
         embeddings,
     )
 
-    print(f"✓ Indexed {len(flat_chunks)} chunks")
+    print(
+        f"✓ Indexed {len(flat_chunks)} chunks"
+    )
 
+
+# ============================================================
+# DISPLAY HELPERS
+# ============================================================
+
+def _get_source_and_pages(
+    metadata: dict,
+) -> tuple[str, str]:
+    """Extract source filename and page information."""
+
+    src = Path(
+        metadata.get("source", "")
+    ).name
+
+    # ChromaDB metadata
+    if "page_start" in metadata:
+
+        pages = (
+            f"pp.{metadata['page_start']}-"
+            f"{metadata['page_end']}"
+            if metadata["page_start"] != -1
+            else "N/A"
+        )
+
+        return src, pages
+
+    # BM25 metadata
+    page_range = metadata.get(
+        "page_range"
+    )
+
+    pages = (
+        f"pp.{page_range[0]}-"
+        f"{page_range[1]}"
+        if page_range
+        else "N/A"
+    )
+
+    return src, pages
+
+
+def _get_heading(
+    metadata: dict,
+) -> str:
+    """Extract heading path from metadata."""
+
+    heading = metadata.get(
+        "heading_path",
+        [],
+    )
+
+    if isinstance(heading, list):
+
+        return (
+            " > ".join(heading)
+            if heading
+            else "(no heading)"
+        )
+
+    return (
+        heading
+        if heading
+        else "(no heading)"
+    )
+
+
+# ============================================================
+# SEMANTIC SEARCH
+# ============================================================
 
 def search_demo(
     store: VectorStore,
     embedder: E5Embedder,
     queries: list[str],
 ) -> None:
-    """Run semantic/vector search queries and display results."""
+    """Run semantic/vector search queries."""
 
     print("\n" + "=" * 50)
     print("SEMANTIC SEARCH")
     print("=" * 50)
 
     for query in queries:
-        print(f"\n🔍 Query: {query}")
 
-        query_embedding = embedder.embed_query(query)
+        print(
+            f"\n🔍 Query: {query}"
+        )
+
+        query_embedding = (
+            embedder.embed_query(query)
+        )
 
         hits = store.search(
             query_embedding,
             k=3,
         )
 
-        for i, hit in enumerate(hits, 1):
+        if not hits:
+
+            print(
+                "  No results found."
+            )
+
+            continue
+
+        for i, hit in enumerate(
+            hits,
+            1,
+        ):
+
             meta = hit["metadata"]
 
-            src = Path(meta["source"]).name
-
-            pages = (
-                f"pp.{meta['page_start']}-{meta['page_end']}"
-                if meta["page_start"] != -1
-                else "N/A"
+            src, pages = (
+                _get_source_and_pages(meta)
             )
 
-            heading = (
-                meta["heading_path"]
-                if meta["heading_path"]
-                else "(no heading)"
+            heading = _get_heading(
+                meta
             )
 
             print(
-                f"  {i}. [{src} {pages}] {heading}"
+                f"  {i}. "
+                f"[{src} {pages}] "
+                f"{heading}"
             )
 
             print(
-                f"     distance={hit['distance']:.3f} | "
+                f"     distance="
+                f"{hit['distance']:.3f} | "
                 f"{hit['text'][:120]}..."
             )
 
+
+# ============================================================
+# BM25 KEYWORD SEARCH
+# ============================================================
 
 def keyword_search_demo(
     bm25: BM25Retriever,
     queries: list[str],
 ) -> None:
-    """Run BM25 keyword searches and display results."""
+    """Run BM25 keyword searches."""
 
     print("\n" + "=" * 50)
     print("BM25 KEYWORD SEARCH")
     print("=" * 50)
 
     for query in queries:
-        print(f"\n🔎 Query: {query}")
+
+        print(
+            f"\n🔎 Query: {query}"
+        )
 
         hits = bm25.search(
             query,
@@ -196,42 +336,44 @@ def keyword_search_demo(
         )
 
         if not hits:
-            print("  No results found.")
+
+            print(
+                "  No results found."
+            )
+
             continue
 
-        for i, hit in enumerate(hits, 1):
+        for i, hit in enumerate(
+            hits,
+            1,
+        ):
+
             meta = hit["metadata"]
 
-            src = Path(meta["source"]).name
-
-            page_range = meta.get("page_range")
-
-            pages = (
-                f"pp.{page_range[0]}-{page_range[1]}"
-                if page_range
-                else "N/A"
+            src, pages = (
+                _get_source_and_pages(meta)
             )
 
-            heading_path = meta.get(
-                "heading_path",
-                [],
-            )
-
-            heading = (
-                " > ".join(heading_path)
-                if heading_path
-                else "(no heading)"
+            heading = _get_heading(
+                meta
             )
 
             print(
-                f"  {i}. [{src} {pages}] {heading}"
+                f"  {i}. "
+                f"[{src} {pages}] "
+                f"{heading}"
             )
 
             print(
-                f"     BM25 score={hit['score']:.3f} | "
+                f"     BM25 score="
+                f"{hit['score']:.3f} | "
                 f"{hit['text'][:120]}..."
             )
 
+
+# ============================================================
+# HYBRID SEARCH
+# ============================================================
 
 def hybrid_search_demo(
     hybrid: HybridRetriever,
@@ -254,7 +396,10 @@ def hybrid_search_demo(
     )
 
     for query in queries:
-        print(f"\n🔎 Query: {query}")
+
+        print(
+            f"\n🔎 Query: {query}"
+        )
 
         hits = hybrid.search(
             query,
@@ -263,51 +408,41 @@ def hybrid_search_demo(
         )
 
         if not hits:
-            print("  No results found.")
+
+            print(
+                "  No results found."
+            )
+
             continue
 
-        for i, hit in enumerate(hits, 1):
+        for i, hit in enumerate(
+            hits,
+            1,
+        ):
+
             meta = hit["metadata"]
 
-            src = Path(meta["source"]).name
-
-            # Handle metadata coming from either
-            # ChromaDB or BM25.
-            if "page_start" in meta:
-                pages = (
-                    f"pp.{meta['page_start']}-{meta['page_end']}"
-                    if meta["page_start"] != -1
-                    else "N/A"
-                )
-            else:
-                page_range = meta.get("page_range")
-
-                pages = (
-                    f"pp.{page_range[0]}-{page_range[1]}"
-                    if page_range
-                    else "N/A"
-                )
-
-            heading = meta.get(
-                "heading_path",
-                "(no heading)",
+            src, pages = (
+                _get_source_and_pages(meta)
             )
 
-            if isinstance(heading, list):
-                heading = (
-                    " > ".join(heading)
-                    if heading
-                    else "(no heading)"
-                )
-
-            print(
-                f"  {i}. [{src} {pages}] {heading}"
+            heading = _get_heading(
+                meta
             )
 
             print(
-                f"     hybrid={hit['hybrid_score']:.3f} | "
-                f"semantic={hit['semantic_score']:.3f} | "
-                f"keyword={hit['keyword_score']:.3f}"
+                f"  {i}. "
+                f"[{src} {pages}] "
+                f"{heading}"
+            )
+
+            print(
+                f"     hybrid="
+                f"{hit['hybrid_score']:.3f} | "
+                f"semantic="
+                f"{hit['semantic_score']:.3f} | "
+                f"keyword="
+                f"{hit['keyword_score']:.3f}"
             )
 
             print(
@@ -315,16 +450,139 @@ def hybrid_search_demo(
             )
 
 
+# ============================================================
+# RERANKED HYBRID SEARCH
+# ============================================================
+
+def reranked_search_demo(
+    hybrid: HybridRetriever,
+    reranker: CrossEncoderReranker,
+    queries: list[str],
+) -> None:
+    """
+    Run two-stage retrieval.
+
+    Stage 1:
+        Hybrid retrieval generates a candidate pool.
+
+    Stage 2:
+        Cross-encoder reranks those candidates.
+    """
+
+    print("\n" + "=" * 50)
+    print("RERANKED HYBRID SEARCH")
+    print("=" * 50)
+
+    print(
+        "Stage 1: Hybrid retrieval"
+    )
+
+    print(
+        "Stage 2: Cross-encoder reranking"
+    )
+
+    print(
+        "Candidates: 20"
+    )
+
+    print(
+        "Final results: 5"
+    )
+
+    for query in queries:
+
+        print(
+            f"\n🔎 Query: {query}"
+        )
+
+        # ----------------------------------------------------
+        # Stage 1: Candidate retrieval
+        # ----------------------------------------------------
+
+        candidates = hybrid.search(
+            query,
+            k=20,
+            candidate_k=20,
+        )
+
+        if not candidates:
+
+            print(
+                "  No candidates found."
+            )
+
+            continue
+
+        # ----------------------------------------------------
+        # Stage 2: Reranking
+        # ----------------------------------------------------
+
+        hits = reranker.rerank(
+            query=query,
+            hits=candidates,
+            top_k=5,
+        )
+
+        if not hits:
+
+            print(
+                "  No reranked results found."
+            )
+
+            continue
+
+        # ----------------------------------------------------
+        # Display final results
+        # ----------------------------------------------------
+
+        for i, hit in enumerate(
+            hits,
+            1,
+        ):
+
+            meta = hit["metadata"]
+
+            src, pages = (
+                _get_source_and_pages(meta)
+            )
+
+            heading = _get_heading(
+                meta
+            )
+
+            print(
+                f"  {i}. "
+                f"[{src} {pages}] "
+                f"{heading}"
+            )
+
+            print(
+                f"     rerank="
+                f"{hit['rerank_score']:.4f} | "
+                f"hybrid="
+                f"{hit.get('hybrid_score', 0.0):.3f}"
+            )
+
+            print(
+                f"     {hit['text'][:200]}..."
+            )
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
 if __name__ == "__main__":
 
-    # ============================================================
+    # ========================================================
     # DOCUMENT READING
-    # ============================================================
+    # ========================================================
 
     docs_dir = "./documents"
 
     print(
-        f"Reading documents from: {docs_dir}"
+        f"Reading documents from: "
+        f"{docs_dir}"
     )
 
     print(
@@ -334,7 +592,9 @@ if __name__ == "__main__":
 
     print("-" * 50)
 
-    documents = read_documents(docs_dir)
+    documents = read_documents(
+        docs_dir
+    )
 
     print("-" * 50)
 
@@ -371,21 +631,25 @@ if __name__ == "__main__":
             )
 
             print(
-                f"  [{block.type.value}{lvl}{pg}] "
+                f"  [{block.type.value}"
+                f"{lvl}{pg}] "
                 f"{block.text[:70]}"
             )
 
         if len(doc.blocks) > 8:
+
             print(
                 f"  ... "
                 f"({len(doc.blocks) - 8} more blocks)"
             )
 
-    # ============================================================
+    # ========================================================
     # CHUNKING
-    # ============================================================
+    # ========================================================
 
-    print("\n" + "=" * 50)
+    print(
+        "\n" + "=" * 50
+    )
 
     print(
         "CHUNKING "
@@ -400,9 +664,17 @@ if __name__ == "__main__":
         overlap_tokens=50,
     )
 
-    print("\n" + "-" * 50)
-    print("CHUNK SUMMARIES")
-    print("-" * 50)
+    print(
+        "\n" + "-" * 50
+    )
+
+    print(
+        "CHUNK SUMMARIES"
+    )
+
+    print(
+        "-" * 50
+    )
 
     total_chunks = 0
 
@@ -439,31 +711,34 @@ if __name__ == "__main__":
             )
 
         if len(chunks) > 3:
+
             print(
                 f"  ... "
                 f"({len(chunks) - 3} more chunks)"
             )
 
     print(
-        f"\nTotal chunks: {total_chunks}"
+        f"\nTotal chunks: "
+        f"{total_chunks}"
     )
 
-    # ============================================================
+    # ========================================================
     # PREPARE RETRIEVAL DATA
-    # ============================================================
+    # ========================================================
 
     flat_chunks = flatten_chunks(
         all_chunks
     )
 
     print(
-        f"\n✓ Prepared {len(flat_chunks)} "
+        f"\n✓ Prepared "
+        f"{len(flat_chunks)} "
         f"chunks for retrieval"
     )
 
-    # ============================================================
+    # ========================================================
     # BM25 KEYWORD INDEX
-    # ============================================================
+    # ========================================================
 
     bm25 = BM25Retriever(
         flat_chunks
@@ -473,9 +748,9 @@ if __name__ == "__main__":
         "✓ BM25 keyword index created"
     )
 
-    # ============================================================
-    # EMBEDDING & VECTOR INDEX
-    # ============================================================
+    # ========================================================
+    # EMBEDDING + VECTOR INDEX
+    # ========================================================
 
     embedder = E5Embedder(
         model_name="intfloat/e5-small-v2"
@@ -492,9 +767,9 @@ if __name__ == "__main__":
         store,
     )
 
-    # ============================================================
+    # ========================================================
     # HYBRID RETRIEVER
-    # ============================================================
+    # ========================================================
 
     hybrid = HybridRetriever(
         embedder=embedder,
@@ -508,9 +783,24 @@ if __name__ == "__main__":
         "✓ Hybrid retriever created"
     )
 
-    # ============================================================
+    # ========================================================
+    # CROSS-ENCODER RERANKER
+    # ========================================================
+
+    reranker = CrossEncoderReranker(
+        model_name=(
+            "cross-encoder/"
+            "ms-marco-MiniLM-L-6-v2"
+        )
+    )
+
+    print(
+        "✓ Cross-encoder reranker created"
+    )
+
+    # ========================================================
     # TEST QUERIES
-    # ============================================================
+    # ========================================================
 
     queries = [
         "What is Aventro Motors company overview?",
@@ -519,9 +809,9 @@ if __name__ == "__main__":
         "Document processing system steps",
     ]
 
-    # ============================================================
+    # ========================================================
     # SEMANTIC SEARCH
-    # ============================================================
+    # ========================================================
 
     search_demo(
         store,
@@ -529,27 +819,37 @@ if __name__ == "__main__":
         queries,
     )
 
-    # ============================================================
+    # ========================================================
     # BM25 KEYWORD SEARCH
-    # ============================================================
+    # ========================================================
 
     keyword_search_demo(
         bm25,
         queries,
     )
 
-    # ============================================================
+    # ========================================================
     # HYBRID SEARCH
-    # ============================================================
+    # ========================================================
 
     hybrid_search_demo(
         hybrid,
         queries,
     )
 
-    # ============================================================
+    # ========================================================
+    # RERANKED HYBRID SEARCH
+    # ========================================================
+
+    reranked_search_demo(
+        hybrid,
+        reranker,
+        queries,
+    )
+
+    # ========================================================
     # FINAL VECTOR COUNT
-    # ============================================================
+    # ========================================================
 
     print(
         f"\n✓ Total vectors in store: "
